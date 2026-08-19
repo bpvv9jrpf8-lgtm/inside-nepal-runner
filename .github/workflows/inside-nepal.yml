@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-test-reel:
+  build-v2-test-reel:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -38,25 +38,20 @@ jobs:
           echo "FFmpeg: $FFMPEG_PATH"
           "$FFMPEG_PATH" -version | head -n 1
           echo "FFMPEG_BIN=$FFMPEG_PATH" >> "$GITHUB_ENV"
-          echo "FFPROBE_BIN=" >> "$GITHUB_ENV"
 
-      - name: Generate improved test reels
+      - name: Generate Inside Nepal V2 test reel
         working-directory: private-code
         env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
-          AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
-          AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
-          META_PAGE_ID: ${{ secrets.META_PAGE_ID }}
-          META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
           FFMPEG_BIN: ${{ env.FFMPEG_BIN }}
-          FFPROBE_BIN: ${{ env.FFPROBE_BIN }}
         run: python main.py
 
-      - name: Upload improved test reels
+      - name: Upload V2 test reel
         uses: actions/upload-artifact@v4
         with:
-          name: inside-nepal-improved-test-reels
+          name: inside-nepal-v2-test
           path: |
-            private-code/output/inside-nepal-test-male.mp4
-            private-code/output/inside-nepal-test-female.mp4
+            private-code/output/inside-nepal-v2-test.mp4
+            private-code/output/verification.json
           retention-days: 1
