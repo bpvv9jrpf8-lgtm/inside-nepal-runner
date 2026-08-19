@@ -24,16 +24,19 @@ jobs:
       - name: Install requests
         run: pip install requests==2.32.5
 
-      - name: Generate Azure Sagar Nepali sample
+      - name: Generate Azure Sagar tone samples
         working-directory: private-code
         env:
           AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
           AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
         run: python azure_sagar_sample.py
 
-      - name: Upload sample MP3
+      - name: Upload tone samples
         uses: actions/upload-artifact@v4
         with:
-          name: azure-sagar-nepali-sample
-          path: private-code/output/azure-sagar-nepali-sample.mp3
+          name: azure-sagar-tone-samples
+          path: |
+            private-code/output/azure-sagar-natural.mp3
+            private-code/output/azure-sagar-calm-news.mp3
+            private-code/output/azure-sagar-energetic-reel.mp3
           retention-days: 1
