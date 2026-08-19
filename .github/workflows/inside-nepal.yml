@@ -19,18 +19,6 @@ jobs:
           token: ${{ secrets.PRIVATE_REPO_TOKEN }}
           path: private-code
 
-      - name: Locate FFmpeg tools
-        shell: bash
-        run: |
-          FFMPEG_PATH="$(command -v ffmpeg)"
-          FFPROBE_PATH="$(command -v ffprobe)"
-          echo "FFmpeg: $FFMPEG_PATH"
-          echo "FFprobe: $FFPROBE_PATH"
-          "$FFMPEG_PATH" -version | head -n 1
-          "$FFPROBE_PATH" -version | head -n 1
-          echo "FFMPEG_BIN=$FFMPEG_PATH" >> "$GITHUB_ENV"
-          echo "FFPROBE_BIN=$FFPROBE_PATH" >> "$GITHUB_ENV"
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -41,6 +29,16 @@ jobs:
       - name: Install Python requirements
         working-directory: private-code
         run: pip install -r requirements.txt
+
+      - name: Locate bundled FFmpeg
+        working-directory: private-code
+        shell: bash
+        run: |
+          FFMPEG_PATH="$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          echo "FFmpeg: $FFMPEG_PATH"
+          "$FFMPEG_PATH" -version | head -n 1
+          echo "FFMPEG_BIN=$FFMPEG_PATH" >> "$GITHUB_ENV"
+          echo "FFPROBE_BIN=" >> "$GITHUB_ENV"
 
       - name: Generate improved test reels
         working-directory: private-code
