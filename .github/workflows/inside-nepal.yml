@@ -35,7 +35,7 @@ jobs:
         working-directory: private-code
         run: pip install -r requirements.txt
 
-      - name: Generate test reel
+      - name: Generate improved test reels
         working-directory: private-code
         env:
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
@@ -45,9 +45,11 @@ jobs:
           META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
         run: python main.py
 
-      - name: Upload test reel
+      - name: Upload improved test reels
         uses: actions/upload-artifact@v4
         with:
-          name: inside-nepal-test-reel
-          path: private-code/output/inside-nepal-test-reel.mp4
+          name: inside-nepal-improved-test-reels
+          path: |
+            private-code/output/inside-nepal-test-male.mp4
+            private-code/output/inside-nepal-test-female.mp4
           retention-days: 1
