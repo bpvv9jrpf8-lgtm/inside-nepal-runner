@@ -4,8 +4,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  run-inside-nepal:
+  build-test-reel:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout public runner
@@ -18,7 +19,35 @@ jobs:
           token: ${{ secrets.PRIVATE_REPO_TOKEN }}
           path: private-code
 
-      - name: Test private repo access
+      - name: Install system packages
         run: |
-          echo "Private repo connected successfully"
-          ls -la private-code
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-noto-core fonts-noto-extra
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: private-code/requirements.txt
+
+      - name: Install Python requirements
+        working-directory: private-code
+        run: pip install -r requirements.txt
+
+      - name: Generate test reel
+        working-directory: private-code
+        env:
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
+          AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
+          META_PAGE_ID: ${{ secrets.META_PAGE_ID }}
+          META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
+        run: python main.py
+
+      - name: Upload test reel
+        uses: actions/upload-artifact@v4
+        with:
+          name: inside-nepal-test-reel
+          path: private-code/output/inside-nepal-test-reel.mp4
+          retention-days: 1
