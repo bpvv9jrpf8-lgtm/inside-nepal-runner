@@ -39,7 +39,7 @@ jobs:
           "$FFMPEG_PATH" -version | head -n 1
           echo "FFMPEG_BIN=$FFMPEG_PATH" >> "$GITHUB_ENV"
 
-      - name: Generate Inside Nepal V2 test reel
+      - name: Generate Inside Nepal V2.1 test reels
         working-directory: private-code
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -47,11 +47,12 @@ jobs:
           FFMPEG_BIN: ${{ env.FFMPEG_BIN }}
         run: python main.py
 
-      - name: Upload V2 test reel
+      - name: Upload V2.1 test reels
         uses: actions/upload-artifact@v4
         with:
-          name: inside-nepal-v2-test
+          name: inside-nepal-v2-1-test
           path: |
-            private-code/output/inside-nepal-v2-test.mp4
+            private-code/output/inside-nepal-v2-cedar.mp4
+            private-code/output/inside-nepal-v2-marin.mp4
             private-code/output/verification.json
           retention-days: 1
