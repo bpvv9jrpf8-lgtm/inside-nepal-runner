@@ -97,7 +97,7 @@ jobs:
           META_PAGE_ID: ${{ secrets.META_PAGE_ID }}
           META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
           FFMPEG_BIN: ${{ env.FFMPEG_BIN }}
-        run: python hindu_production_pexels.py
+        run: python hindu_no_text_runner.py
 
       - name: Save successful topic history
         shell: bash
