@@ -47,7 +47,7 @@ jobs:
           AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
           AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
           FFMPEG_BIN: ${{ env.FFMPEG_BIN }}
-        run: python hindu_daily.py
+        run: python hindu_daily_runner.py
 
       - name: Upload Hindu test reel
         uses: actions/upload-artifact@v4
