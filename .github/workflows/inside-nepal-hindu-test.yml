@@ -6,7 +6,7 @@ on:
 jobs:
   build-hindu-test-reel:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
 
     steps:
       - name: Checkout public runner
@@ -39,7 +39,7 @@ jobs:
           "$FFMPEG_PATH" -version | head -n 1
           echo "FFMPEG_BIN=$FFMPEG_PATH" >> "$GITHUB_ENV"
 
-      - name: Generate Hindu motivational story reel
+      - name: Generate scene-matched Hindu reel V3
         working-directory: private-code
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -47,14 +47,15 @@ jobs:
           AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
           AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
           FFMPEG_BIN: ${{ env.FFMPEG_BIN }}
-        run: python hindu_daily_runner.py
+        run: python hindu_daily_v3.py
 
-      - name: Upload Hindu test reel
+      - name: Upload Hindu V3 test reel
         uses: actions/upload-artifact@v4
         with:
-          name: inside-nepal-hindu-test
+          name: inside-nepal-hindu-v3-test
           path: |
-            private-code/output-hindu/inside-nepal-hindu-story-test.mp4
-            private-code/output-hindu/voice-creator-news.mp3
-            private-code/output-hindu/content.json
+            private-code/output-hindu-v3/inside-nepal-hindu-v3-test.mp4
+            private-code/output-hindu-v3/voice-creator-news.mp3
+            private-code/output-hindu-v3/content.json
+            private-code/output-hindu-v3/media-credits.json
           retention-days: 1
