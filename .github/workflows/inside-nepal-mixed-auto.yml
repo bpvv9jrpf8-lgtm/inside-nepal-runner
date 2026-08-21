@@ -1,0 +1,110 @@
+name: Inside Nepal Mixed Auto Content
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Manual post type
+        required: true
+        default: auto
+        type: choice
+        options:
+          - auto
+          - text
+          - photo
+          - reel
+  schedule:
+    - cron: '0 * * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: inside-nepal-mixed-auto
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 58
+    steps:
+      - name: Checkout public runner
+        uses: actions/checkout@v4
+
+      - name: Checkout private code
+        uses: actions/checkout@v4
+        with:
+          repository: bpvv9jrpf8-lgtm/inside-nepal-private
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          path: private-code
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: private-code/requirements.txt
+
+      - name: Install requirements
+        working-directory: private-code
+        run: pip install -r requirements.txt
+
+      - name: Locate bundled FFmpeg
+        working-directory: private-code
+        run: |
+          FFMPEG_PATH="$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          "$FFMPEG_PATH" -version | head -n 1
+          echo "FFMPEG_BIN=$FFMPEG_PATH" >> "$GITHUB_ENV"
+
+      - name: Resolve run mode
+        id: mode
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "mode=${{ inputs.mode }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=auto" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate verify and publish mixed content
+        working-directory: private-code
+        env:
+          RUN_MODE: ${{ steps.mode.outputs.mode }}
+          HISTORY_PATH: ../inside-nepal-mixed-history.json
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          COVERR_API_KEY: ${{ secrets.COVERR_API_KEY }}
+          AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
+          AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
+          META_PAGE_ID: ${{ secrets.META_PAGE_ID }}
+          META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
+          FFMPEG_BIN: ${{ env.FFMPEG_BIN }}
+        run: python inside_nepal_mixed.py
+
+      - name: Save successful mixed-topic history
+        if: success()
+        shell: bash
+        run: |
+          if [ ! -f inside-nepal-mixed-history.json ]; then
+            echo "No history file yet."
+            exit 0
+          fi
+          if git diff --quiet -- inside-nepal-mixed-history.json && git ls-files --error-unmatch inside-nepal-mixed-history.json >/dev/null 2>&1; then
+            echo "No history change."
+            exit 0
+          fi
+          git config user.name "Inside Nepal Automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add inside-nepal-mixed-history.json
+          git commit -m "Update mixed content history" || exit 0
+          git push
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: inside-nepal-mixed-${{ github.run_number }}
+          path: private-code/output-inside-nepal-mixed/*
+          if-no-files-found: ignore
+          retention-days: 1
