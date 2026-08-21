@@ -1,10 +1,10 @@
-name: Inside Nepal Hindu Auto Posts
+name: Inside Nepal Hindu Manual Only
 
 on:
   workflow_dispatch:
     inputs:
       slot:
-        description: Post slot to run
+        description: Manual Hindu post slot
         required: true
         default: reel_story
         type: choice
@@ -14,79 +14,36 @@ on:
           - reel_afternoon
           - photo_evening
           - reel_story
-  schedule:
-    # Nepal time (NPT = UTC+5:45)
-    - cron: '45 1 * * *'   # 07:30 NPT - morning reel
-    - cron: '45 3 * * *'   # 09:30 NPT - morning photo
-    - cron: '15 7 * * *'   # 13:00 NPT - afternoon reel
-    - cron: '45 12 * * *'  # 18:30 NPT - evening photo
-    - cron: '45 14 * * *'  # 20:30 NPT - cinematic story reel
 
 permissions:
   contents: write
-
-concurrency:
-  group: inside-nepal-hindu-auto
-  cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 55
-
     steps:
-      - name: Checkout public runner
-        uses: actions/checkout@v4
-
-      - name: Checkout private automation code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           repository: bpvv9jrpf8-lgtm/inside-nepal-private
           token: ${{ secrets.PRIVATE_REPO_TOKEN }}
           path: private-code
-
-      - name: Resolve post slot
-        id: slot
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            SLOT="${{ inputs.slot }}"
-          else
-            case "${{ github.event.schedule }}" in
-              "45 1 * * *") SLOT="reel_morning" ;;
-              "45 3 * * *") SLOT="photo_morning" ;;
-              "15 7 * * *") SLOT="reel_afternoon" ;;
-              "45 12 * * *") SLOT="photo_evening" ;;
-              "45 14 * * *") SLOT="reel_story" ;;
-              *) echo "Unknown schedule"; exit 1 ;;
-            esac
-          fi
-          echo "slot=$SLOT" >> "$GITHUB_OUTPUT"
-          echo "Running slot: $SLOT"
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: 'pip'
-          cache-dependency-path: private-code/requirements.txt
-
       - name: Install requirements
         working-directory: private-code
         run: pip install -r requirements.txt
-
-      - name: Locate bundled FFmpeg
+      - name: Locate FFmpeg
         working-directory: private-code
-        shell: bash
         run: |
           FFMPEG_PATH="$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')"
-          "$FFMPEG_PATH" -version | head -n 1
           echo "FFMPEG_BIN=$FFMPEG_PATH" >> "$GITHUB_ENV"
-
-      - name: Generate and auto-publish Hindu content
+      - name: Run manual Hindu content
         working-directory: private-code
         env:
-          POST_SLOT: ${{ steps.slot.outputs.slot }}
+          POST_SLOT: ${{ inputs.slot }}
           AUTO_PUBLISH: 'true'
           HISTORY_PATH: ../hindu-post-history.json
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -98,29 +55,3 @@ jobs:
           META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
           FFMPEG_BIN: ${{ env.FFMPEG_BIN }}
         run: python hindu_no_text_runner.py
-
-      - name: Save successful topic history
-        shell: bash
-        run: |
-          if git diff --quiet -- hindu-post-history.json; then
-            echo "No history change to commit."
-            exit 0
-          fi
-          git config user.name "Inside Nepal Automation"
-          git config user.email "actions@users.noreply.github.com"
-          git add hindu-post-history.json
-          git commit -m "Update Hindu post history"
-          git push
-
-      - name: Upload production result
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: inside-nepal-${{ steps.slot.outputs.slot }}-${{ github.run_number }}
-          path: |
-            private-code/output-hindu-production/*
-            private-code/output-hindu-v4/*.mp4
-            private-code/output-hindu-v4/content.json
-            private-code/output-hindu-v4/media-credits.json
-          if-no-files-found: ignore
-          retention-days: 1
