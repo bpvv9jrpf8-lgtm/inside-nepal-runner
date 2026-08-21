@@ -16,5 +16,11 @@
     "slot": "reel_morning",
     "type": "reel",
     "topic": "Somavar Morning: Gentle Shiva Puja"
+  },
+  {
+    "date": "2026-08-21",
+    "slot": "photo_morning",
+    "type": "photo",
+    "topic": "Morning Devotional Reminder"
   }
 ]
