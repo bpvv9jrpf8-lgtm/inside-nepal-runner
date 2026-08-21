@@ -1,4 +1,4 @@
-name: Inside Nepal Mixed Auto Content
+name: Inside Nepal Mixed Manual Only
 
 on:
   workflow_dispatch:
@@ -13,14 +13,12 @@ on:
           - text
           - photo
           - reel
-  schedule:
-    - cron: '0 * * * *'
 
 permissions:
   contents: write
 
 concurrency:
-  group: inside-nepal-mixed-auto
+  group: inside-nepal-mixed-manual
   cancel-in-progress: false
 
 jobs:
@@ -60,11 +58,7 @@ jobs:
         id: mode
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "mode=${{ inputs.mode }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "mode=auto" >> "$GITHUB_OUTPUT"
-          fi
+          echo "mode=${{ inputs.mode }}" >> "$GITHUB_OUTPUT"
 
       - name: Generate verify and publish mixed content
         working-directory: private-code
