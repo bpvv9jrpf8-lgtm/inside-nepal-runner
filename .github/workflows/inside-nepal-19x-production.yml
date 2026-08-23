@@ -105,7 +105,7 @@ jobs:
           INSIDE_NEPAL_REEL_MODE: ${{ steps.slot.outputs.reel_mode }}
         run: python reel_v7.py
 
-      - name: Generate regular text or photo post
+      - name: Generate regular designed post
         if: steps.slot.outputs.kind != 'reel'
         working-directory: private-code
         env:
@@ -136,7 +136,8 @@ jobs:
           PY
           )
           else
-            KIND="$PLANNED"
+            # Plain text-only publishing is disabled. Both photo and text slots use a designed 4:5 card.
+            KIND='photo'
             TEXT=$(python - <<'PY'
           import json
           d=json.load(open('output-mixed/post.json',encoding='utf-8'))
@@ -185,7 +186,7 @@ jobs:
           [ -n "$URL" ] || exit 1
           echo "url=$URL" >> "$GITHUB_OUTPUT"
 
-      - name: Upload effective photo to ImgBB
+      - name: Upload effective designed card to ImgBB
         if: steps.route.outputs.kind == 'photo'
         id: photohost
         working-directory: private-code
@@ -200,6 +201,7 @@ jobs:
           else
             FILE='output-mixed/inside-nepal-photo.jpg'
           fi
+          [ -f "$FILE" ] || { echo "Designed card missing: $FILE"; exit 1; }
           B64=$(base64 -w 0 "$FILE")
           curl -sS -X POST 'https://api.imgbb.com/1/upload' \
             --data-urlencode "key=$IMGBB_API_KEY" \
@@ -224,12 +226,9 @@ jobs:
           if [ "$KIND" = 'reel' ]; then
             jq -n --arg query "$QUERY" --arg text "$POST_TEXT" --arg channel "$BUFFER_CHANNEL_ID" --arg due "$DUE_AT" --arg video "$VIDEO_URL" \
               '{query:$query,variables:{input:{text:$text,channelId:$channel,metadata:{facebook:{type:"reel"}},schedulingType:"automatic",mode:"customScheduled",dueAt:$due,assets:[{video:{url:$video}}]}}}' > buffer.json
-          elif [ "$KIND" = 'photo' ]; then
+          else
             jq -n --arg query "$QUERY" --arg text "$POST_TEXT" --arg channel "$BUFFER_CHANNEL_ID" --arg due "$DUE_AT" --arg image "$IMAGE_URL" \
               '{query:$query,variables:{input:{text:$text,channelId:$channel,metadata:{facebook:{type:"post"}},schedulingType:"automatic",mode:"customScheduled",dueAt:$due,assets:[{image:{url:$image}}]}}}' > buffer.json
-          else
-            jq -n --arg query "$QUERY" --arg text "$POST_TEXT" --arg channel "$BUFFER_CHANNEL_ID" --arg due "$DUE_AT" \
-              '{query:$query,variables:{input:{text:$text,channelId:$channel,metadata:{facebook:{type:"post"}},schedulingType:"automatic",mode:"customScheduled",dueAt:$due}}}' > buffer.json
           fi
 
           HTTP=$(curl -sS -o buffer-response.json -w '%{http_code}' -X POST 'https://api.buffer.com' \
