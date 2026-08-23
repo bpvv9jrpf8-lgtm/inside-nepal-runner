@@ -49,8 +49,6 @@ jobs:
         run: |
           UTC_HOUR=$(date -u +%H)
           UTC_HOUR=$((10#$UTC_HOUR))
-          # This run prepares the next UTC hour. Nepal is +5:45,
-          # so target Nepal hour = current UTC hour + 7, modulo 24.
           NPT_HOUR=$(((UTC_HOUR + 7) % 24))
           printf -v NPT_PAD '%02d' "$NPT_HOUR"
 
@@ -84,15 +82,21 @@ jobs:
           FFMPEG_PATH="$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')"
           echo "FFMPEG_BIN=$FFMPEG_PATH" >> "$GITHUB_ENV"
 
-      - name: Generate Reel
+      - name: Generate Reel with Azure Nepali TTS
         if: steps.slot.outputs.kind == 'reel'
         working-directory: private-code
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
+          AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
+          AZURE_SPEECH_VOICE: ne-NP-SagarNeural
           FFMPEG_BIN: ${{ env.FFMPEG_BIN }}
           INSIDE_NEPAL_REEL_MODE: ${{ steps.slot.outputs.reel_mode }}
-        run: python reel_v5.py
+        run: |
+          [ -n "${AZURE_SPEECH_KEY:-}" ] || { echo 'AZURE_SPEECH_KEY missing'; exit 1; }
+          [ -n "${AZURE_SPEECH_REGION:-}" ] || { echo 'AZURE_SPEECH_REGION missing'; exit 1; }
+          python reel_v6.py
 
       - name: Upload Reel to Cloudinary
         if: steps.slot.outputs.kind == 'reel'
