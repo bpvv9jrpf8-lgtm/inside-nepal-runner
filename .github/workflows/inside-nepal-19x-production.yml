@@ -1,0 +1,210 @@
+name: Inside Nepal 19x Daily Production
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Run one hour before each Nepal slot. Due time is the next :15 UTC,
+    # which equals the next top-of-hour in Nepal (UTC+5:45).
+    # This covers 06:00 through 00:00 Nepal time = 19 posts/day.
+    - cron: '15 0-17,23 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inside-nepal-hourly-production
+  cancel-in-progress: false
+
+jobs:
+  produce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+
+    steps:
+      - name: Checkout public runner
+        uses: actions/checkout@v4
+
+      - name: Checkout private automation code
+        uses: actions/checkout@v4
+        with:
+          repository: bpvv9jrpf8-lgtm/inside-nepal-private
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          path: private-code
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: private-code/requirements.txt
+
+      - name: Install requirements
+        run: |
+          pip install -r private-code/requirements.txt
+          pip install cloudinary
+
+      - name: Resolve target Nepal slot
+        id: slot
+        shell: bash
+        run: |
+          UTC_HOUR=$(date -u +%H)
+          UTC_HOUR=$((10#$UTC_HOUR))
+          # This run prepares the next UTC hour. Nepal is +5:45,
+          # so target Nepal hour = current UTC hour + 7, modulo 24.
+          NPT_HOUR=$(((UTC_HOUR + 7) % 24))
+          printf -v NPT_PAD '%02d' "$NPT_HOUR"
+
+          if [[ "$NPT_HOUR" == "8" || "$NPT_HOUR" == "11" || "$NPT_HOUR" == "14" || "$NPT_HOUR" == "17" || "$NPT_HOUR" == "20" ]]; then
+            KIND='reel'
+          elif [[ "$NPT_HOUR" == "6" || "$NPT_HOUR" == "9" || "$NPT_HOUR" == "12" || "$NPT_HOUR" == "15" || "$NPT_HOUR" == "18" || "$NPT_HOUR" == "21" || "$NPT_HOUR" == "23" ]]; then
+            KIND='photo'
+          else
+            KIND='text'
+          fi
+
+          case "$NPT_HOUR" in
+            8|14|20) REEL_MODE='news_roundup' ;;
+            11) REEL_MODE='travel_curiosity' ;;
+            17) REEL_MODE='festival_culture' ;;
+            *) REEL_MODE='' ;;
+          esac
+
+          DUE_AT=$(date -u -d '+1 hour' '+%Y-%m-%dT%H:15:00.000Z')
+          echo "hour=$NPT_HOUR" >> "$GITHUB_OUTPUT"
+          echo "hour_pad=$NPT_PAD" >> "$GITHUB_OUTPUT"
+          echo "kind=$KIND" >> "$GITHUB_OUTPUT"
+          echo "reel_mode=$REEL_MODE" >> "$GITHUB_OUTPUT"
+          echo "due_at=$DUE_AT" >> "$GITHUB_OUTPUT"
+          echo "Target Nepal slot: ${NPT_PAD}:00 | kind=$KIND | mode=$REEL_MODE | due=$DUE_AT"
+
+      - name: Locate FFmpeg
+        if: steps.slot.outputs.kind == 'reel'
+        working-directory: private-code
+        run: |
+          FFMPEG_PATH="$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          echo "FFMPEG_BIN=$FFMPEG_PATH" >> "$GITHUB_ENV"
+
+      - name: Generate Reel
+        if: steps.slot.outputs.kind == 'reel'
+        working-directory: private-code
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          FFMPEG_BIN: ${{ env.FFMPEG_BIN }}
+          INSIDE_NEPAL_REEL_MODE: ${{ steps.slot.outputs.reel_mode }}
+        run: python reel_v5.py
+
+      - name: Upload Reel to Cloudinary
+        if: steps.slot.outputs.kind == 'reel'
+        id: reelhost
+        working-directory: private-code
+        env:
+          CLOUDINARY_RAW: ${{ secrets.CLOUDINARY_URL }}
+        run: |
+          python - <<'PY' > cloudinary-result.json
+          import os, json
+          raw=os.environ['CLOUDINARY_RAW'].strip().strip('"').strip("'")
+          if raw.startswith('CLOUDINARY_URL='):
+              raw=raw.split('=',1)[1].strip().strip('"').strip("'")
+          if not raw.startswith('cloudinary://'):
+              raise SystemExit('Invalid Cloudinary secret')
+          body=raw[len('cloudinary://'):]
+          cred,cloud=body.rsplit('@',1)
+          key,secret=cred.split(':',1)
+          cloud=cloud.split('?',1)[0].strip('/')
+          os.environ.pop('CLOUDINARY_URL',None)
+          import cloudinary, cloudinary.uploader
+          cloudinary.config(cloud_name=cloud,api_key=key,api_secret=secret,secure=True)
+          r=cloudinary.uploader.upload('output/inside-nepal-v5.mp4',resource_type='video',folder='inside-nepal-production',overwrite=False)
+          print(json.dumps({'url':r['secure_url']}))
+          PY
+          URL=$(jq -r '.url // empty' cloudinary-result.json)
+          [ -n "$URL" ] || exit 1
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Build Reel caption
+        if: steps.slot.outputs.kind == 'reel'
+        id: reelcaption
+        working-directory: private-code
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          d=json.load(open('output/verification.json',encoding='utf-8'))
+          hook=d.get('hook','').strip(); script=d.get('script','').strip()
+          text=f"{hook}\n\n{script}\n\n#InsideNepal #Nepal #Nepali #नेपाल"
+          print('text<<EOF'); print(text); print('EOF')
+          PY
+
+      - name: Generate Text or Photo post
+        if: steps.slot.outputs.kind != 'reel'
+        working-directory: private-code
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          INSIDE_NEPAL_POST_KIND: ${{ steps.slot.outputs.kind }}
+          INSIDE_NEPAL_SLOT_HOUR: ${{ steps.slot.outputs.hour_pad }}
+        run: python mixed_post.py
+
+      - name: Upload Photo to ImgBB
+        if: steps.slot.outputs.kind == 'photo'
+        id: photohost
+        working-directory: private-code
+        env:
+          IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
+        run: |
+          [ -n "${IMGBB_API_KEY:-}" ] || { echo 'IMGBB_API_KEY missing'; exit 1; }
+          B64=$(base64 -w 0 output-mixed/inside-nepal-photo.jpg)
+          curl -sS -X POST 'https://api.imgbb.com/1/upload' \
+            --data-urlencode "key=$IMGBB_API_KEY" \
+            --data-urlencode "image=$B64" > imgbb.json
+          URL=$(jq -r '.data.url // empty' imgbb.json)
+          [ -n "$URL" ] || { cat imgbb.json; exit 1; }
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Read Mixed caption
+        if: steps.slot.outputs.kind != 'reel'
+        id: mixedcaption
+        working-directory: private-code
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          d=json.load(open('output-mixed/post.json',encoding='utf-8'))
+          print('text<<EOF'); print(d['caption'].strip()); print('EOF')
+          PY
+
+      - name: Send to Buffer
+        env:
+          BUFFER_API_TOKEN: ${{ secrets.BUFFER_API_TOKEN }}
+          BUFFER_CHANNEL_ID: ${{ secrets.BUFFER_CHANNEL_ID }}
+          KIND: ${{ steps.slot.outputs.kind }}
+          DUE_AT: ${{ steps.slot.outputs.due_at }}
+          REEL_TEXT: ${{ steps.reelcaption.outputs.text }}
+          MIXED_TEXT: ${{ steps.mixedcaption.outputs.text }}
+          VIDEO_URL: ${{ steps.reelhost.outputs.url }}
+          IMAGE_URL: ${{ steps.photohost.outputs.url }}
+        run: |
+          set -euo pipefail
+          [ -n "${BUFFER_API_TOKEN:-}" ] || { echo 'BUFFER_API_TOKEN missing'; exit 1; }
+          [ -n "${BUFFER_CHANNEL_ID:-}" ] || { echo 'BUFFER_CHANNEL_ID missing'; exit 1; }
+
+          QUERY='mutation CreatePost($input: CreatePostInput!) { createPost(input: $input) { ... on PostActionSuccess { post { id dueAt status } } ... on MutationError { message } } }'
+
+          if [ "$KIND" = 'reel' ]; then
+            jq -n --arg query "$QUERY" --arg text "$REEL_TEXT" --arg channel "$BUFFER_CHANNEL_ID" --arg due "$DUE_AT" --arg video "$VIDEO_URL" \
+              '{query:$query,variables:{input:{text:$text,channelId:$channel,metadata:{facebook:{type:"reel"}},schedulingType:"automatic",mode:"customScheduled",dueAt:$due,assets:[{video:{url:$video}}]}}}' > buffer.json
+          elif [ "$KIND" = 'photo' ]; then
+            jq -n --arg query "$QUERY" --arg text "$MIXED_TEXT" --arg channel "$BUFFER_CHANNEL_ID" --arg due "$DUE_AT" --arg image "$IMAGE_URL" \
+              '{query:$query,variables:{input:{text:$text,channelId:$channel,metadata:{facebook:{type:"post"}},schedulingType:"automatic",mode:"customScheduled",dueAt:$due,assets:[{image:{url:$image}}]}}}' > buffer.json
+          else
+            jq -n --arg query "$QUERY" --arg text "$MIXED_TEXT" --arg channel "$BUFFER_CHANNEL_ID" --arg due "$DUE_AT" \
+              '{query:$query,variables:{input:{text:$text,channelId:$channel,metadata:{facebook:{type:"post"}},schedulingType:"automatic",mode:"customScheduled",dueAt:$due}}}' > buffer.json
+          fi
+
+          HTTP=$(curl -sS -o buffer-response.json -w '%{http_code}' -X POST 'https://api.buffer.com' \
+            -H 'Content-Type: application/json' -H "Authorization: Bearer $BUFFER_API_TOKEN" --data-binary @buffer.json)
+          cat buffer-response.json | jq . || true
+          [ "$HTTP" -ge 200 ] && [ "$HTTP" -lt 300 ] || exit 1
+          ERR=$(jq -r '.errors[0].message // .data.createPost.message // empty' buffer-response.json)
+          ID=$(jq -r '.data.createPost.post.id // empty' buffer-response.json)
+          [ -z "$ERR" ] && [ -n "$ID" ] || { echo "Buffer error: $ERR"; exit 1; }
+          echo "Created Buffer post $ID for Nepal slot ${{ steps.slot.outputs.hour_pad }}:00"
