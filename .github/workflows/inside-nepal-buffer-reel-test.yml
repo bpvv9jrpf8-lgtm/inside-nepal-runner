@@ -105,7 +105,7 @@ jobs:
           print('EOF')
           PY
 
-      - name: Send Reel to Buffer
+      - name: Send Reel to Buffer Queue
         env:
           BUFFER_API_TOKEN: ${{ secrets.BUFFER_API_TOKEN }}
           BUFFER_CHANNEL_ID: ${{ secrets.BUFFER_CHANNEL_ID }}
@@ -113,13 +113,14 @@ jobs:
           VIDEO_URL: ${{ steps.host.outputs.url }}
         run: |
           set -euo pipefail
-          DUE_AT=$(date -u -d '+1 minute' '+%Y-%m-%dT%H:%M:%S.000Z')
           QUERY='mutation CreatePost($input: CreatePostInput!) { createPost(input: $input) { ... on PostActionSuccess { post { id text dueAt status assets { id mimeType source } } } ... on MutationError { message } } }'
-          jq -n --arg query "$QUERY" --arg text "$POST_TEXT" --arg channel "$BUFFER_CHANNEL_ID" --arg due "$DUE_AT" --arg video "$VIDEO_URL" '{query:$query,variables:{input:{text:$text,channelId:$channel,metadata:{facebook:{type:"reel"}},schedulingType:"automatic",mode:"customScheduled",dueAt:$due,assets:[{video:{url:$video}}]}}}' > buffer.json
+          jq -n --arg query "$QUERY" --arg text "$POST_TEXT" --arg channel "$BUFFER_CHANNEL_ID" --arg video "$VIDEO_URL" '{query:$query,variables:{input:{text:$text,channelId:$channel,metadata:{facebook:{type:"reel"}},schedulingType:"automatic",mode:"addToQueue",assets:[{video:{url:$video}}]}}}' > buffer.json
           HTTP=$(curl -sS -o buffer-response.json -w '%{http_code}' -X POST 'https://api.buffer.com' -H 'Content-Type: application/json' -H "Authorization: Bearer $BUFFER_API_TOKEN" --data-binary @buffer.json)
           cat buffer-response.json | jq . || true
           [ "$HTTP" -ge 200 ] && [ "$HTTP" -lt 300 ] || exit 1
           ERR=$(jq -r '.errors[0].message // .data.createPost.message // empty' buffer-response.json)
           ID=$(jq -r '.data.createPost.post.id // empty' buffer-response.json)
+          STATUS=$(jq -r '.data.createPost.post.status // empty' buffer-response.json)
+          DUE=$(jq -r '.data.createPost.post.dueAt // empty' buffer-response.json)
           [ -z "$ERR" ] && [ -n "$ID" ] || { echo "$ERR"; exit 1; }
-          echo "Inside Nepal Buffer Reel created: $ID"
+          echo "Inside Nepal Buffer post created: $ID status=$STATUS dueAt=$DUE"
