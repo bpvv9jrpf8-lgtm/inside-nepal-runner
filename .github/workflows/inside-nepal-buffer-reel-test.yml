@@ -47,22 +47,27 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
+          AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
           CLOUDINARY_RAW: ${{ secrets.CLOUDINARY_URL }}
           BUFFER_API_TOKEN: ${{ secrets.BUFFER_API_TOKEN }}
           BUFFER_CHANNEL_ID: ${{ secrets.BUFFER_CHANNEL_ID }}
         run: |
           set -euo pipefail
-          for n in OPENAI_API_KEY PIXABAY_API_KEY CLOUDINARY_RAW BUFFER_API_TOKEN BUFFER_CHANNEL_ID; do
+          for n in OPENAI_API_KEY PIXABAY_API_KEY AZURE_SPEECH_KEY AZURE_SPEECH_REGION CLOUDINARY_RAW BUFFER_API_TOKEN BUFFER_CHANNEL_ID; do
             [ -n "${!n:-}" ] || { echo "$n missing"; exit 1; }
           done
 
-      - name: Generate verified Inside Nepal Reel
+      - name: Generate Azure Nepali Inside Nepal Reel
         working-directory: private-code
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
+          AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
+          AZURE_SPEECH_VOICE: ne-NP-SagarNeural
           FFMPEG_BIN: ${{ env.FFMPEG_BIN }}
-        run: python main.py
+        run: python azure_reel.py
 
       - name: Upload Reel to Cloudinary
         id: host
@@ -84,7 +89,7 @@ jobs:
           import cloudinary
           import cloudinary.uploader
           cloudinary.config(cloud_name=cloud,api_key=key,api_secret=secret,secure=True)
-          r=cloudinary.uploader.upload('output/inside-nepal-v2-cedar.mp4',resource_type='video',folder='inside-nepal-reels',overwrite=False)
+          r=cloudinary.uploader.upload('output/inside-nepal-azure-sagar.mp4',resource_type='video',folder='inside-nepal-reels',overwrite=False)
           print(json.dumps({'url':r['secure_url']}))
           PY
           URL=$(jq -r '.url // empty' cloudinary-result.json)
@@ -106,7 +111,7 @@ jobs:
           print('EOF')
           PY
 
-      - name: Send Reel to Buffer Queue
+      - name: Send Azure Reel to Buffer Queue
         id: buffer
         continue-on-error: true
         env:
@@ -137,4 +142,4 @@ jobs:
           ID=$(jq -r '.response.data.createPost.post.id // empty' inside-nepal-buffer-debug.json)
           ERR=$(jq -r '.response.errors[0].message // .response.data.createPost.message // empty' inside-nepal-buffer-debug.json)
           [ -n "$ID" ] || { echo "Buffer error: $ERR"; exit 1; }
-          echo "Buffer post created: $ID"
+          echo "Azure TTS Buffer reel created: $ID"
