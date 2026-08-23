@@ -47,12 +47,12 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
-          CLOUDINARY_URL: ${{ secrets.CLOUDINARY_URL }}
+          CLOUDINARY_RAW: ${{ secrets.CLOUDINARY_URL }}
           BUFFER_API_TOKEN: ${{ secrets.BUFFER_API_TOKEN }}
           BUFFER_CHANNEL_ID: ${{ secrets.BUFFER_CHANNEL_ID }}
         run: |
           set -euo pipefail
-          for n in OPENAI_API_KEY PIXABAY_API_KEY CLOUDINARY_URL BUFFER_API_TOKEN BUFFER_CHANNEL_ID; do
+          for n in OPENAI_API_KEY PIXABAY_API_KEY CLOUDINARY_RAW BUFFER_API_TOKEN BUFFER_CHANNEL_ID; do
             [ -n "${!n:-}" ] || { echo "$n missing"; exit 1; }
           done
 
@@ -68,18 +68,21 @@ jobs:
         id: host
         working-directory: private-code
         env:
-          CLOUDINARY_URL: ${{ secrets.CLOUDINARY_URL }}
+          CLOUDINARY_RAW: ${{ secrets.CLOUDINARY_URL }}
         run: |
           python - <<'PY' > cloudinary-result.json
           import os, json
-          import cloudinary, cloudinary.uploader
-          raw=os.environ['CLOUDINARY_URL'].strip().strip('"').strip("'")
+          raw=os.environ['CLOUDINARY_RAW'].strip().strip('"').strip("'")
           if raw.startswith('CLOUDINARY_URL='):
               raw=raw.split('=',1)[1].strip().strip('"').strip("'")
+          if not raw.startswith('cloudinary://'):
+              raise SystemExit('Invalid Cloudinary secret format')
           body=raw[len('cloudinary://'):]
           cred,cloud=body.rsplit('@',1)
           key,secret=cred.split(':',1)
           cloud=cloud.split('?',1)[0].strip('/')
+          import cloudinary
+          import cloudinary.uploader
           cloudinary.config(cloud_name=cloud,api_key=key,api_secret=secret,secure=True)
           r=cloudinary.uploader.upload('output/inside-nepal-v2-cedar.mp4',resource_type='video',folder='inside-nepal-reels',overwrite=False)
           print(json.dumps({'url':r['secure_url']}))
