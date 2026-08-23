@@ -7,7 +7,7 @@ on:
       - '.github/workflows/inside-nepal-buffer-reel-test.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-and-post:
@@ -76,8 +76,6 @@ jobs:
           raw=os.environ['CLOUDINARY_URL'].strip().strip('"').strip("'")
           if raw.startswith('CLOUDINARY_URL='):
               raw=raw.split('=',1)[1].strip().strip('"').strip("'")
-          if not raw.startswith('cloudinary://'):
-              raise SystemExit('Invalid CLOUDINARY_URL')
           body=raw[len('cloudinary://'):]
           cred,cloud=body.rsplit('@',1)
           key,secret=cred.split(':',1)
@@ -87,7 +85,7 @@ jobs:
           print(json.dumps({'url':r['secure_url']}))
           PY
           URL=$(jq -r '.url // empty' cloudinary-result.json)
-          [ -n "$URL" ] || { echo 'Cloudinary URL missing'; exit 1; }
+          [ -n "$URL" ] || exit 1
           echo "url=$URL" >> "$GITHUB_OUTPUT"
 
       - name: Build Facebook caption
@@ -106,21 +104,34 @@ jobs:
           PY
 
       - name: Send Reel to Buffer Queue
+        id: buffer
+        continue-on-error: true
         env:
           BUFFER_API_TOKEN: ${{ secrets.BUFFER_API_TOKEN }}
           BUFFER_CHANNEL_ID: ${{ secrets.BUFFER_CHANNEL_ID }}
           POST_TEXT: ${{ steps.caption.outputs.text }}
           VIDEO_URL: ${{ steps.host.outputs.url }}
         run: |
-          set -euo pipefail
           QUERY='mutation CreatePost($input: CreatePostInput!) { createPost(input: $input) { ... on PostActionSuccess { post { id text dueAt status assets { id mimeType source } } } ... on MutationError { message } } }'
           jq -n --arg query "$QUERY" --arg text "$POST_TEXT" --arg channel "$BUFFER_CHANNEL_ID" --arg video "$VIDEO_URL" '{query:$query,variables:{input:{text:$text,channelId:$channel,metadata:{facebook:{type:"reel"}},schedulingType:"automatic",mode:"addToQueue",assets:[{video:{url:$video}}]}}}' > buffer.json
           HTTP=$(curl -sS -o buffer-response.json -w '%{http_code}' -X POST 'https://api.buffer.com' -H 'Content-Type: application/json' -H "Authorization: Bearer $BUFFER_API_TOKEN" --data-binary @buffer.json)
-          cat buffer-response.json | jq . || true
-          [ "$HTTP" -ge 200 ] && [ "$HTTP" -lt 300 ] || exit 1
-          ERR=$(jq -r '.errors[0].message // .data.createPost.message // empty' buffer-response.json)
-          ID=$(jq -r '.data.createPost.post.id // empty' buffer-response.json)
-          STATUS=$(jq -r '.data.createPost.post.status // empty' buffer-response.json)
-          DUE=$(jq -r '.data.createPost.post.dueAt // empty' buffer-response.json)
-          [ -z "$ERR" ] && [ -n "$ID" ] || { echo "$ERR"; exit 1; }
-          echo "Inside Nepal Buffer post created: $ID status=$STATUS dueAt=$DUE"
+          jq -n --arg http "$HTTP" --slurpfile response buffer-response.json '{http_status:$http,response:$response[0]}' > inside-nepal-buffer-debug.json
+          cat inside-nepal-buffer-debug.json
+
+      - name: Save Buffer diagnostic
+        if: always()
+        run: |
+          if [ -f inside-nepal-buffer-debug.json ]; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add inside-nepal-buffer-debug.json
+            git commit -m 'Update Inside Nepal Buffer diagnostic' || true
+            git push || true
+          fi
+
+      - name: Validate Buffer result
+        run: |
+          ID=$(jq -r '.response.data.createPost.post.id // empty' inside-nepal-buffer-debug.json)
+          ERR=$(jq -r '.response.errors[0].message // .response.data.createPost.message // empty' inside-nepal-buffer-debug.json)
+          [ -n "$ID" ] || { echo "Buffer error: $ERR"; exit 1; }
+          echo "Buffer post created: $ID"
