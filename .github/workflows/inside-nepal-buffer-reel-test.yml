@@ -110,7 +110,7 @@ jobs:
           VIDEO_URL: ${{ steps.host.outputs.url }}
         run: |
           set -euo pipefail
-          DUE_AT=$(date -u -d '+10 minutes' '+%Y-%m-%dT%H:%M:%S.000Z')
+          DUE_AT=$(date -u -d '+2 minutes' '+%Y-%m-%dT%H:%M:%S.000Z')
           QUERY='mutation CreatePost($input: CreatePostInput!) { createPost(input: $input) { ... on PostActionSuccess { post { id text dueAt status assets { id mimeType source } } } ... on MutationError { message } } }'
           jq -n --arg query "$QUERY" --arg text "$POST_TEXT" --arg channel "$BUFFER_CHANNEL_ID" --arg due "$DUE_AT" --arg video "$VIDEO_URL" '{query:$query,variables:{input:{text:$text,channelId:$channel,metadata:{facebook:{type:"reel"}},schedulingType:"automatic",mode:"customScheduled",dueAt:$due,assets:[{video:{url:$video}}]}}}' > buffer.json
           HTTP=$(curl -sS -o buffer-response.json -w '%{http_code}' -X POST 'https://api.buffer.com' -H 'Content-Type: application/json' -H "Authorization: Bearer $BUFFER_API_TOKEN" --data-binary @buffer.json)
