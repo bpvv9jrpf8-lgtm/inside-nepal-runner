@@ -3,9 +3,6 @@ name: Inside Nepal 19x Daily Production
 on:
   workflow_dispatch:
   schedule:
-    # Run one hour before each Nepal slot. Due time is the next :15 UTC,
-    # which equals the next top-of-hour in Nepal (UTC+5:45).
-    # This covers 06:00 through 00:00 Nepal time = 19 posts/day.
     - cron: '15 0-17,23 * * *'
 
 permissions:
@@ -73,7 +70,6 @@ jobs:
           echo "kind=$KIND" >> "$GITHUB_OUTPUT"
           echo "reel_mode=$REEL_MODE" >> "$GITHUB_OUTPUT"
           echo "due_at=$DUE_AT" >> "$GITHUB_OUTPUT"
-          echo "Target Nepal slot: ${NPT_PAD}:00 | kind=$KIND | mode=$REEL_MODE | due=$DUE_AT"
 
       - name: Locate FFmpeg
         if: steps.slot.outputs.kind == 'reel'
@@ -82,8 +78,22 @@ jobs:
           FFMPEG_PATH="$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')"
           echo "FFMPEG_BIN=$FFMPEG_PATH" >> "$GITHUB_ENV"
 
-      - name: Generate Reel with Azure Nepali TTS
-        if: steps.slot.outputs.kind == 'reel'
+      - name: Generate news with strict media router
+        if: steps.slot.outputs.kind == 'reel' && steps.slot.outputs.reel_mode == 'news_roundup'
+        working-directory: private-code
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
+          AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
+          AZURE_SPEECH_VOICE: ne-NP-SagarNeural
+          FFMPEG_BIN: ${{ env.FFMPEG_BIN }}
+          INSIDE_NEPAL_REEL_MODE: news_roundup
+          INSIDE_NEPAL_SLOT_HOUR: ${{ steps.slot.outputs.hour_pad }}
+        run: python news_router.py
+
+      - name: Generate travel or culture reel
+        if: steps.slot.outputs.kind == 'reel' && steps.slot.outputs.reel_mode != 'news_roundup'
         working-directory: private-code
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -93,18 +103,68 @@ jobs:
           AZURE_SPEECH_VOICE: ne-NP-SagarNeural
           FFMPEG_BIN: ${{ env.FFMPEG_BIN }}
           INSIDE_NEPAL_REEL_MODE: ${{ steps.slot.outputs.reel_mode }}
-        run: |
-          [ -n "${AZURE_SPEECH_KEY:-}" ] || { echo 'AZURE_SPEECH_KEY missing'; exit 1; }
-          [ -n "${AZURE_SPEECH_REGION:-}" ] || { echo 'AZURE_SPEECH_REGION missing'; exit 1; }
-          python reel_v6.py
+        run: python reel_v7.py
 
-      - name: Upload Reel to Cloudinary
-        if: steps.slot.outputs.kind == 'reel'
+      - name: Generate regular text or photo post
+        if: steps.slot.outputs.kind != 'reel'
+        working-directory: private-code
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          INSIDE_NEPAL_POST_KIND: ${{ steps.slot.outputs.kind }}
+          INSIDE_NEPAL_SLOT_HOUR: ${{ steps.slot.outputs.hour_pad }}
+        run: python mixed_post.py
+
+      - name: Resolve effective post kind and caption
+        id: route
+        working-directory: private-code
+        shell: bash
+        run: |
+          set -euo pipefail
+          PLANNED='${{ steps.slot.outputs.kind }}'
+          MODE='${{ steps.slot.outputs.reel_mode }}'
+
+          if [ "$PLANNED" = 'reel' ] && [ "$MODE" = 'news_roundup' ]; then
+            KIND=$(jq -r '.kind' output/route.json)
+            TEXT=$(jq -r '.caption' output/route.json)
+          elif [ "$PLANNED" = 'reel' ]; then
+            KIND='reel'
+            TEXT=$(python - <<'PY'
+          import json
+          d=json.load(open('output/verification.json',encoding='utf-8'))
+          print(f"{d.get('hook','').strip()}\n\n{d.get('script','').strip()}\n\n#InsideNepal #Nepal #Nepali #नेपाल")
+          PY
+          )
+          else
+            KIND="$PLANNED"
+            TEXT=$(python - <<'PY'
+          import json
+          d=json.load(open('output-mixed/post.json',encoding='utf-8'))
+          print(d['caption'].strip())
+          PY
+          )
+          fi
+
+          echo "kind=$KIND" >> "$GITHUB_OUTPUT"
+          echo 'text<<EOF' >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$TEXT" >> "$GITHUB_OUTPUT"
+          echo 'EOF' >> "$GITHUB_OUTPUT"
+          echo "Effective kind: $KIND"
+
+      - name: Upload effective reel to Cloudinary
+        if: steps.route.outputs.kind == 'reel'
         id: reelhost
         working-directory: private-code
         env:
           CLOUDINARY_RAW: ${{ secrets.CLOUDINARY_URL }}
+          REEL_MODE: ${{ steps.slot.outputs.reel_mode }}
         run: |
+          if [ "$REEL_MODE" = 'news_roundup' ]; then
+            FILE='output/inside-nepal-routed-reel.mp4'
+          else
+            FILE='output/inside-nepal-v7.mp4'
+          fi
+          export FILE
           python - <<'PY' > cloudinary-result.json
           import os, json
           raw=os.environ['CLOUDINARY_RAW'].strip().strip('"').strip("'")
@@ -116,48 +176,31 @@ jobs:
           cred,cloud=body.rsplit('@',1)
           key,secret=cred.split(':',1)
           cloud=cloud.split('?',1)[0].strip('/')
-          os.environ.pop('CLOUDINARY_URL',None)
           import cloudinary, cloudinary.uploader
           cloudinary.config(cloud_name=cloud,api_key=key,api_secret=secret,secure=True)
-          r=cloudinary.uploader.upload('output/inside-nepal-v5.mp4',resource_type='video',folder='inside-nepal-production',overwrite=False)
+          r=cloudinary.uploader.upload(os.environ['FILE'],resource_type='video',folder='inside-nepal-production',overwrite=False)
           print(json.dumps({'url':r['secure_url']}))
           PY
           URL=$(jq -r '.url // empty' cloudinary-result.json)
           [ -n "$URL" ] || exit 1
           echo "url=$URL" >> "$GITHUB_OUTPUT"
 
-      - name: Build Reel caption
-        if: steps.slot.outputs.kind == 'reel'
-        id: reelcaption
-        working-directory: private-code
-        run: |
-          python - <<'PY' >> "$GITHUB_OUTPUT"
-          import json
-          d=json.load(open('output/verification.json',encoding='utf-8'))
-          hook=d.get('hook','').strip(); script=d.get('script','').strip()
-          text=f"{hook}\n\n{script}\n\n#InsideNepal #Nepal #Nepali #नेपाल"
-          print('text<<EOF'); print(text); print('EOF')
-          PY
-
-      - name: Generate Text or Photo post
-        if: steps.slot.outputs.kind != 'reel'
-        working-directory: private-code
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
-          INSIDE_NEPAL_POST_KIND: ${{ steps.slot.outputs.kind }}
-          INSIDE_NEPAL_SLOT_HOUR: ${{ steps.slot.outputs.hour_pad }}
-        run: python mixed_post.py
-
-      - name: Upload Photo to ImgBB
-        if: steps.slot.outputs.kind == 'photo'
+      - name: Upload effective photo to ImgBB
+        if: steps.route.outputs.kind == 'photo'
         id: photohost
         working-directory: private-code
         env:
           IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
+          PLANNED: ${{ steps.slot.outputs.kind }}
+          MODE: ${{ steps.slot.outputs.reel_mode }}
         run: |
           [ -n "${IMGBB_API_KEY:-}" ] || { echo 'IMGBB_API_KEY missing'; exit 1; }
-          B64=$(base64 -w 0 output-mixed/inside-nepal-photo.jpg)
+          if [ "$PLANNED" = 'reel' ] && [ "$MODE" = 'news_roundup' ]; then
+            FILE='output/inside-nepal-news-photo.jpg'
+          else
+            FILE='output-mixed/inside-nepal-photo.jpg'
+          fi
+          B64=$(base64 -w 0 "$FILE")
           curl -sS -X POST 'https://api.imgbb.com/1/upload' \
             --data-urlencode "key=$IMGBB_API_KEY" \
             --data-urlencode "image=$B64" > imgbb.json
@@ -165,42 +208,27 @@ jobs:
           [ -n "$URL" ] || { cat imgbb.json; exit 1; }
           echo "url=$URL" >> "$GITHUB_OUTPUT"
 
-      - name: Read Mixed caption
-        if: steps.slot.outputs.kind != 'reel'
-        id: mixedcaption
-        working-directory: private-code
-        run: |
-          python - <<'PY' >> "$GITHUB_OUTPUT"
-          import json
-          d=json.load(open('output-mixed/post.json',encoding='utf-8'))
-          print('text<<EOF'); print(d['caption'].strip()); print('EOF')
-          PY
-
-      - name: Send to Buffer
+      - name: Send effective post to Buffer
         env:
           BUFFER_API_TOKEN: ${{ secrets.BUFFER_API_TOKEN }}
           BUFFER_CHANNEL_ID: ${{ secrets.BUFFER_CHANNEL_ID }}
-          KIND: ${{ steps.slot.outputs.kind }}
+          KIND: ${{ steps.route.outputs.kind }}
           DUE_AT: ${{ steps.slot.outputs.due_at }}
-          REEL_TEXT: ${{ steps.reelcaption.outputs.text }}
-          MIXED_TEXT: ${{ steps.mixedcaption.outputs.text }}
+          POST_TEXT: ${{ steps.route.outputs.text }}
           VIDEO_URL: ${{ steps.reelhost.outputs.url }}
           IMAGE_URL: ${{ steps.photohost.outputs.url }}
         run: |
           set -euo pipefail
-          [ -n "${BUFFER_API_TOKEN:-}" ] || { echo 'BUFFER_API_TOKEN missing'; exit 1; }
-          [ -n "${BUFFER_CHANNEL_ID:-}" ] || { echo 'BUFFER_CHANNEL_ID missing'; exit 1; }
-
           QUERY='mutation CreatePost($input: CreatePostInput!) { createPost(input: $input) { ... on PostActionSuccess { post { id dueAt status } } ... on MutationError { message } } }'
 
           if [ "$KIND" = 'reel' ]; then
-            jq -n --arg query "$QUERY" --arg text "$REEL_TEXT" --arg channel "$BUFFER_CHANNEL_ID" --arg due "$DUE_AT" --arg video "$VIDEO_URL" \
+            jq -n --arg query "$QUERY" --arg text "$POST_TEXT" --arg channel "$BUFFER_CHANNEL_ID" --arg due "$DUE_AT" --arg video "$VIDEO_URL" \
               '{query:$query,variables:{input:{text:$text,channelId:$channel,metadata:{facebook:{type:"reel"}},schedulingType:"automatic",mode:"customScheduled",dueAt:$due,assets:[{video:{url:$video}}]}}}' > buffer.json
           elif [ "$KIND" = 'photo' ]; then
-            jq -n --arg query "$QUERY" --arg text "$MIXED_TEXT" --arg channel "$BUFFER_CHANNEL_ID" --arg due "$DUE_AT" --arg image "$IMAGE_URL" \
+            jq -n --arg query "$QUERY" --arg text "$POST_TEXT" --arg channel "$BUFFER_CHANNEL_ID" --arg due "$DUE_AT" --arg image "$IMAGE_URL" \
               '{query:$query,variables:{input:{text:$text,channelId:$channel,metadata:{facebook:{type:"post"}},schedulingType:"automatic",mode:"customScheduled",dueAt:$due,assets:[{image:{url:$image}}]}}}' > buffer.json
           else
-            jq -n --arg query "$QUERY" --arg text "$MIXED_TEXT" --arg channel "$BUFFER_CHANNEL_ID" --arg due "$DUE_AT" \
+            jq -n --arg query "$QUERY" --arg text "$POST_TEXT" --arg channel "$BUFFER_CHANNEL_ID" --arg due "$DUE_AT" \
               '{query:$query,variables:{input:{text:$text,channelId:$channel,metadata:{facebook:{type:"post"}},schedulingType:"automatic",mode:"customScheduled",dueAt:$due}}}' > buffer.json
           fi
 
@@ -211,4 +239,4 @@ jobs:
           ERR=$(jq -r '.errors[0].message // .data.createPost.message // empty' buffer-response.json)
           ID=$(jq -r '.data.createPost.post.id // empty' buffer-response.json)
           [ -z "$ERR" ] && [ -n "$ID" ] || { echo "Buffer error: $ERR"; exit 1; }
-          echo "Created Buffer post $ID for Nepal slot ${{ steps.slot.outputs.hour_pad }}:00"
+          echo "Created Buffer $KIND post $ID for Nepal slot ${{ steps.slot.outputs.hour_pad }}:00"
