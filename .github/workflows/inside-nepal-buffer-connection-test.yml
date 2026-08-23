@@ -1,0 +1,50 @@
+name: Inside Nepal Buffer Connection Test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/inside-nepal-buffer-connection-test.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  buffer-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate secrets
+        env:
+          BUFFER_API_TOKEN: ${{ secrets.BUFFER_API_TOKEN }}
+          BUFFER_CHANNEL_ID: ${{ secrets.BUFFER_CHANNEL_ID }}
+        run: |
+          set -euo pipefail
+          [ -n "${BUFFER_API_TOKEN:-}" ] || { echo 'BUFFER_API_TOKEN missing'; exit 1; }
+          [ -n "${BUFFER_CHANNEL_ID:-}" ] || { echo 'BUFFER_CHANNEL_ID missing'; exit 1; }
+
+      - name: Create visible Buffer queue test
+        env:
+          BUFFER_API_TOKEN: ${{ secrets.BUFFER_API_TOKEN }}
+          BUFFER_CHANNEL_ID: ${{ secrets.BUFFER_CHANNEL_ID }}
+        run: |
+          set -euo pipefail
+          DUE_AT=$(date -u -d '+30 minutes' '+%Y-%m-%dT%H:%M:%S.000Z')
+          TEXT="Inside Nepal Buffer connection test — $(date -u '+%Y-%m-%d %H:%M UTC')"
+          QUERY='mutation CreatePost($input: CreatePostInput!) { createPost(input: $input) { ... on PostActionSuccess { post { id text dueAt status } } ... on MutationError { message } } }'
+          jq -n --arg query "$QUERY" --arg text "$TEXT" --arg channel "$BUFFER_CHANNEL_ID" --arg due "$DUE_AT" '{query:$query,variables:{input:{text:$text,channelId:$channel,metadata:{facebook:{type:"post"}},schedulingType:"automatic",mode:"customScheduled",dueAt:$due}}}' > request.json
+          HTTP=$(curl -sS -o response.json -w '%{http_code}' -X POST 'https://api.buffer.com' -H 'Content-Type: application/json' -H "Authorization: Bearer $BUFFER_API_TOKEN" --data-binary @request.json)
+          echo "HTTP=$HTTP"
+          jq . response.json || cat response.json
+          [ "$HTTP" -ge 200 ] && [ "$HTTP" -lt 300 ] || exit 1
+          ERR=$(jq -r '.errors[0].message // .data.createPost.message // empty' response.json)
+          ID=$(jq -r '.data.createPost.post.id // empty' response.json)
+          STATUS=$(jq -r '.data.createPost.post.status // empty' response.json)
+          DUE=$(jq -r '.data.createPost.post.dueAt // empty' response.json)
+          if [ -n "$ERR" ] || [ -z "$ID" ]; then
+            echo "BUFFER_ERROR=$ERR"
+            exit 1
+          fi
+          echo "BUFFER_POST_ID=$ID"
+          echo "BUFFER_STATUS=$STATUS"
+          echo "BUFFER_DUE_AT=$DUE"
