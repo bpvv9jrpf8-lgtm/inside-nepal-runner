@@ -58,7 +58,7 @@ jobs:
             [ -n "${!n:-}" ] || { echo "$n missing"; exit 1; }
           done
 
-      - name: Generate Azure Nepali Inside Nepal Reel
+      - name: Generate V7 Azure Nepali Inside Nepal Reel
         working-directory: private-code
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -67,7 +67,8 @@ jobs:
           AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
           AZURE_SPEECH_VOICE: ne-NP-SagarNeural
           FFMPEG_BIN: ${{ env.FFMPEG_BIN }}
-        run: python azure_reel.py
+          INSIDE_NEPAL_REEL_MODE: news_roundup
+        run: python reel_v7.py
 
       - name: Upload Reel to Cloudinary
         id: host
@@ -89,7 +90,7 @@ jobs:
           import cloudinary
           import cloudinary.uploader
           cloudinary.config(cloud_name=cloud,api_key=key,api_secret=secret,secure=True)
-          r=cloudinary.uploader.upload('output/inside-nepal-azure-sagar.mp4',resource_type='video',folder='inside-nepal-reels',overwrite=False)
+          r=cloudinary.uploader.upload('output/inside-nepal-v7.mp4',resource_type='video',folder='inside-nepal-reels',overwrite=False)
           print(json.dumps({'url':r['secure_url']}))
           PY
           URL=$(jq -r '.url // empty' cloudinary-result.json)
@@ -142,4 +143,4 @@ jobs:
           ID=$(jq -r '.response.data.createPost.post.id // empty' inside-nepal-buffer-debug.json)
           ERR=$(jq -r '.response.errors[0].message // .response.data.createPost.message // empty' inside-nepal-buffer-debug.json)
           [ -n "$ID" ] || { echo "Buffer error: $ERR"; exit 1; }
-          echo "Azure TTS Buffer reel created: $ID"
+          echo "V7 Buffer reel created: $ID"
