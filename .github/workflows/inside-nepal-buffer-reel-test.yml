@@ -45,7 +45,6 @@ jobs:
 
       - name: Validate required secrets
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
           AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
           AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
@@ -54,21 +53,19 @@ jobs:
           BUFFER_CHANNEL_ID: ${{ secrets.BUFFER_CHANNEL_ID }}
         run: |
           set -euo pipefail
-          for n in OPENAI_API_KEY PIXABAY_API_KEY AZURE_SPEECH_KEY AZURE_SPEECH_REGION CLOUDINARY_RAW BUFFER_API_TOKEN BUFFER_CHANNEL_ID; do
+          for n in PIXABAY_API_KEY AZURE_SPEECH_KEY AZURE_SPEECH_REGION CLOUDINARY_RAW BUFFER_API_TOKEN BUFFER_CHANNEL_ID; do
             [ -n "${!n:-}" ] || { echo "$n missing"; exit 1; }
           done
 
-      - name: Generate V7 Azure Nepali Inside Nepal Reel
+      - name: Generate forced Rara Lake sample Reel
         working-directory: private-code
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
           AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
           AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
           AZURE_SPEECH_VOICE: ne-NP-SagarNeural
           FFMPEG_BIN: ${{ env.FFMPEG_BIN }}
-          INSIDE_NEPAL_REEL_MODE: news_roundup
-        run: python reel_v7.py
+        run: python sample_rara.py
 
       - name: Upload Reel to Cloudinary
         id: host
@@ -104,15 +101,15 @@ jobs:
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import json
           p=json.load(open('output/verification.json',encoding='utf-8'))
-          hook=p.get('hook','नेपालको नयाँ अपडेट').strip()
+          hook=p.get('hook','तपाईंलाई थाहा छ यो ठाउँ?').strip()
           script=p.get('script','').strip()
-          text=f"{hook}\n\n{script}\n\nतपाईंलाई यो अपडेट कस्तो लाग्यो?\n\n#InsideNepal #Nepal #NepalNews #Nepali #नेपाल"
+          text=f"{hook}\n\n{script}\n\nतपाईं मौका पाए रारा घुम्न जानुहुन्छ?\n\n#InsideNepal #RaraLake #Mugu #VisitNepal #NepalTravel #नेपाल"
           print('text<<EOF')
           print(text)
           print('EOF')
           PY
 
-      - name: Send Azure Reel to Buffer Queue
+      - name: Send Rara Reel to Buffer Queue
         id: buffer
         continue-on-error: true
         env:
@@ -143,4 +140,4 @@ jobs:
           ID=$(jq -r '.response.data.createPost.post.id // empty' inside-nepal-buffer-debug.json)
           ERR=$(jq -r '.response.errors[0].message // .response.data.createPost.message // empty' inside-nepal-buffer-debug.json)
           [ -n "$ID" ] || { echo "Buffer error: $ERR"; exit 1; }
-          echo "V7 Buffer reel created: $ID"
+          echo "Rara sample Buffer reel created: $ID"
