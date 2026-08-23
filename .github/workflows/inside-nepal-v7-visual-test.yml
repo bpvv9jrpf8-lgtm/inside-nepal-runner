@@ -1,0 +1,122 @@
+name: Inside Nepal V7 Visual Reel Test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/inside-nepal-v7-visual-test.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout public runner
+        uses: actions/checkout@v4
+
+      - name: Checkout private automation code
+        uses: actions/checkout@v4
+        with:
+          repository: bpvv9jrpf8-lgtm/inside-nepal-private
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          path: private-code
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: private-code/requirements.txt
+
+      - name: Install requirements
+        run: |
+          pip install -r private-code/requirements.txt
+          pip install cloudinary
+
+      - name: Locate FFmpeg
+        working-directory: private-code
+        run: |
+          FFMPEG_PATH="$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          echo "FFMPEG_BIN=$FFMPEG_PATH" >> "$GITHUB_ENV"
+
+      - name: Generate strict-match Azure Reel
+        working-directory: private-code
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
+          AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
+          AZURE_SPEECH_VOICE: ne-NP-SagarNeural
+          FFMPEG_BIN: ${{ env.FFMPEG_BIN }}
+          INSIDE_NEPAL_REEL_MODE: news_roundup
+        run: python reel_v6.py
+
+      - name: Upload Reel to Cloudinary
+        id: host
+        working-directory: private-code
+        env:
+          CLOUDINARY_RAW: ${{ secrets.CLOUDINARY_URL }}
+        run: |
+          python - <<'PY' > cloudinary-result.json
+          import os, json
+          raw=os.environ['CLOUDINARY_RAW'].strip().strip('"').strip("'")
+          if raw.startswith('CLOUDINARY_URL='):
+              raw=raw.split('=',1)[1].strip().strip('"').strip("'")
+          if not raw.startswith('cloudinary://'):
+              raise SystemExit('Invalid Cloudinary secret format')
+          body=raw[len('cloudinary://'):]
+          cred,cloud=body.rsplit('@',1)
+          key,secret=cred.split(':',1)
+          cloud=cloud.split('?',1)[0].strip('/')
+          import cloudinary, cloudinary.uploader
+          cloudinary.config(cloud_name=cloud,api_key=key,api_secret=secret,secure=True)
+          r=cloudinary.uploader.upload('output/inside-nepal-v5.mp4',resource_type='video',folder='inside-nepal-reels',overwrite=False)
+          print(json.dumps({'url':r['secure_url']}))
+          PY
+          URL=$(jq -r '.url // empty' cloudinary-result.json)
+          [ -n "$URL" ] || exit 1
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Build Facebook caption
+        id: caption
+        working-directory: private-code
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          p=json.load(open('output/verification.json',encoding='utf-8'))
+          hook=p.get('hook','नेपालको नयाँ अपडेट').strip()
+          script=p.get('script','').strip()
+          text=f"{hook}\n\n{script}\n\n#InsideNepal #Nepal #NepalNews #Nepali #नेपाल"
+          print('text<<EOF'); print(text); print('EOF')
+          PY
+
+      - name: Send V7 Reel to Buffer Queue
+        env:
+          BUFFER_API_TOKEN: ${{ secrets.BUFFER_API_TOKEN }}
+          BUFFER_CHANNEL_ID: ${{ secrets.BUFFER_CHANNEL_ID }}
+          POST_TEXT: ${{ steps.caption.outputs.text }}
+          VIDEO_URL: ${{ steps.host.outputs.url }}
+        run: |
+          set -euo pipefail
+          QUERY='mutation CreatePost($input: CreatePostInput!) { createPost(input: $input) { ... on PostActionSuccess { post { id text dueAt status } } ... on MutationError { message } } }'
+          jq -n --arg query "$QUERY" --arg text "$POST_TEXT" --arg channel "$BUFFER_CHANNEL_ID" --arg video "$VIDEO_URL" '{query:$query,variables:{input:{text:$text,channelId:$channel,metadata:{facebook:{type:"reel"}},schedulingType:"automatic",mode:"addToQueue",assets:[{video:{url:$video}}]}}}' > buffer.json
+          HTTP=$(curl -sS -o buffer-response.json -w '%{http_code}' -X POST 'https://api.buffer.com' -H 'Content-Type: application/json' -H "Authorization: Bearer $BUFFER_API_TOKEN" --data-binary @buffer.json)
+          cat buffer-response.json | jq . || true
+          [ "$HTTP" -ge 200 ] && [ "$HTTP" -lt 300 ] || exit 1
+          ERR=$(jq -r '.errors[0].message // .data.createPost.message // empty' buffer-response.json)
+          ID=$(jq -r '.data.createPost.post.id // empty' buffer-response.json)
+          [ -z "$ERR" ] && [ -n "$ID" ] || { echo "Buffer error: $ERR"; exit 1; }
+          echo "Strict visual Buffer reel created: $ID"
+
+      - name: Upload visual audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: inside-nepal-v7-visual-audit
+          path: |
+            private-code/output/verification.json
+            private-code/output/media-credits.json
+          retention-days: 1
