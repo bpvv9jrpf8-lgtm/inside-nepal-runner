@@ -69,7 +69,6 @@ jobs:
             *) REEL_MODE='' ;;
           esac
 
-          # Publish shortly after generation instead of delaying the post by another hour.
           DUE_AT=$(date -u -d '+10 minutes' '+%Y-%m-%dT%H:%M:00.000Z')
           echo "hour=$NPT_HOUR" >> "$GITHUB_OUTPUT"
           echo "hour_pad=$NPT_PAD" >> "$GITHUB_OUTPUT"
@@ -185,35 +184,48 @@ jobs:
           cloud=cloud.split('?',1)[0].strip('/')
           import cloudinary, cloudinary.uploader
           cloudinary.config(cloud_name=cloud,api_key=key,api_secret=secret,secure=True)
-          r=cloudinary.uploader.upload(os.environ['FILE'],resource_type='video',folder='inside-nepal-production',overwrite=False)
+          r=cloudinary.uploader.upload(os.environ['FILE'],resource_type='video',folder='inside-nepal-production/reels',overwrite=False)
           print(json.dumps({'url':r['secure_url']}))
           PY
           URL=$(jq -r '.url // empty' cloudinary-result.json)
           [ -n "$URL" ] || exit 1
           echo "url=$URL" >> "$GITHUB_OUTPUT"
 
-      - name: Upload effective designed card to ImgBB
+      - name: Upload effective designed card to Cloudinary
         if: steps.route.outputs.kind == 'photo'
         id: photohost
         working-directory: private-code
         env:
-          IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
+          CLOUDINARY_RAW: ${{ secrets.CLOUDINARY_URL }}
           PLANNED: ${{ steps.slot.outputs.kind }}
           MODE: ${{ steps.slot.outputs.reel_mode }}
         run: |
-          [ -n "${IMGBB_API_KEY:-}" ] || { echo 'IMGBB_API_KEY missing'; exit 1; }
+          set -euo pipefail
           if [ "$PLANNED" = 'reel' ] && [ "$MODE" = 'news_roundup' ]; then
             FILE='output/inside-nepal-news-photo.jpg'
           else
             FILE='output-mixed/inside-nepal-photo.jpg'
           fi
           [ -f "$FILE" ] || { echo "Designed card missing: $FILE"; exit 1; }
-          B64=$(base64 -w 0 "$FILE")
-          curl -sS -X POST 'https://api.imgbb.com/1/upload' \
-            --data-urlencode "key=$IMGBB_API_KEY" \
-            --data-urlencode "image=$B64" > imgbb.json
-          URL=$(jq -r '.data.url // empty' imgbb.json)
-          [ -n "$URL" ] || { cat imgbb.json; exit 1; }
+          export FILE
+          python - <<'PY' > cloudinary-photo-result.json
+          import os, json
+          raw=os.environ['CLOUDINARY_RAW'].strip().strip('"').strip("'")
+          if raw.startswith('CLOUDINARY_URL='):
+              raw=raw.split('=',1)[1].strip().strip('"').strip("'")
+          if not raw.startswith('cloudinary://'):
+              raise SystemExit('Invalid Cloudinary secret')
+          body=raw[len('cloudinary://'):]
+          cred,cloud=body.rsplit('@',1)
+          key,secret=cred.split(':',1)
+          cloud=cloud.split('?',1)[0].strip('/')
+          import cloudinary, cloudinary.uploader
+          cloudinary.config(cloud_name=cloud,api_key=key,api_secret=secret,secure=True)
+          r=cloudinary.uploader.upload(os.environ['FILE'],resource_type='image',folder='inside-nepal-production/cards',overwrite=False)
+          print(json.dumps({'url':r['secure_url']}))
+          PY
+          URL=$(jq -r '.url // empty' cloudinary-photo-result.json)
+          [ -n "$URL" ] || { cat cloudinary-photo-result.json; exit 1; }
           echo "url=$URL" >> "$GITHUB_OUTPUT"
 
       - name: Send effective post to Buffer
