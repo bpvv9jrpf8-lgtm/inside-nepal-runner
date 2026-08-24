@@ -2,8 +2,12 @@ name: Inside Nepal 19x Daily Production
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/inside-nepal-19x-production.yml'
   schedule:
-    - cron: '15 0-17,23 * * *'
+    # 00:15-18:15 UTC maps exactly to 06:00-00:00 Nepal time (UTC+5:45).
+    - cron: '15 0-18 * * *'
 
 permissions:
   contents: read
@@ -46,7 +50,8 @@ jobs:
         run: |
           UTC_HOUR=$(date -u +%H)
           UTC_HOUR=$((10#$UTC_HOUR))
-          NPT_HOUR=$(((UTC_HOUR + 7) % 24))
+          # This workflow always runs at :15 UTC. :15 + 5:45 = the next exact Nepal hour.
+          NPT_HOUR=$(((UTC_HOUR + 6) % 24))
           printf -v NPT_PAD '%02d' "$NPT_HOUR"
 
           if [[ "$NPT_HOUR" == "8" || "$NPT_HOUR" == "11" || "$NPT_HOUR" == "14" || "$NPT_HOUR" == "17" || "$NPT_HOUR" == "20" ]]; then
@@ -64,12 +69,14 @@ jobs:
             *) REEL_MODE='' ;;
           esac
 
-          DUE_AT=$(date -u -d '+1 hour' '+%Y-%m-%dT%H:15:00.000Z')
+          # Publish shortly after generation instead of delaying the post by another hour.
+          DUE_AT=$(date -u -d '+10 minutes' '+%Y-%m-%dT%H:%M:00.000Z')
           echo "hour=$NPT_HOUR" >> "$GITHUB_OUTPUT"
           echo "hour_pad=$NPT_PAD" >> "$GITHUB_OUTPUT"
           echo "kind=$KIND" >> "$GITHUB_OUTPUT"
           echo "reel_mode=$REEL_MODE" >> "$GITHUB_OUTPUT"
           echo "due_at=$DUE_AT" >> "$GITHUB_OUTPUT"
+          echo "Resolved Nepal slot: ${NPT_PAD}:00 -> ${KIND} ${REEL_MODE}"
 
       - name: Locate FFmpeg
         if: steps.slot.outputs.kind == 'reel'
@@ -136,7 +143,6 @@ jobs:
           PY
           )
           else
-            # Plain text-only publishing is disabled. Both photo and text slots use a designed 4:5 card.
             KIND='photo'
             TEXT=$(python - <<'PY'
           import json
