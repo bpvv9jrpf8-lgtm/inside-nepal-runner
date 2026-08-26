@@ -1,4 +1,4 @@
-name: Inside Nepal Publish Only
+name: Inside Nepal Photo Publish Only
 
 on:
   workflow_run:
@@ -16,18 +16,15 @@ permissions:
   actions: read
 
 concurrency:
-  group: inside-nepal-publish
+  group: inside-nepal-photo-publish
   cancel-in-progress: false
 
 jobs:
   publish:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
-      - name: Checkout public runner
-        uses: actions/checkout@v4
-
       - name: Resolve source generation run
         id: source
         shell: bash
@@ -35,9 +32,8 @@ jobs:
           AUTO_RUN_ID: ${{ github.event.workflow_run.id }}
           MANUAL_RUN_ID: ${{ inputs.source_run_id }}
         run: |
-          set -euo pipefail
           if [ "${{ github.event_name }}" = 'workflow_run' ]; then RUN_ID="$AUTO_RUN_ID"; else RUN_ID="$MANUAL_RUN_ID"; fi
-          [ -n "$RUN_ID" ] || { echo 'Source run ID missing'; exit 1; }
+          [ -n "$RUN_ID" ] || exit 1
           echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
 
       - name: Download saved package
@@ -49,52 +45,39 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ steps.source.outputs.run_id }}
 
-      - name: Validate publish secrets and package
-        env:
-          BUFFER_API_TOKEN: ${{ secrets.BUFFER_API_TOKEN }}
-          BUFFER_CHANNEL_ID: ${{ secrets.BUFFER_CHANNEL_ID }}
-        run: |
-          set -euo pipefail
-          [ -n "$BUFFER_API_TOKEN" ] || { echo 'BUFFER_API_TOKEN missing'; exit 1; }
-          [ -n "$BUFFER_CHANNEL_ID" ] || { echo 'BUFFER_CHANNEL_ID missing'; exit 1; }
-          test -s inside-nepal-package/publish.json
-          jq -e '.kind and .text and (.video_url or .image_url)' inside-nepal-package/publish.json >/dev/null
+      - name: Install hosting dependency
+        run: pip install cloudinary
 
-      - name: Publish exact saved package to Buffer
+      - name: Upload saved photo to Cloudinary
+        id: host
+        env:
+          CLOUDINARY_RAW: ${{ secrets.CLOUDINARY_URL }}
+        run: |
+          python - <<'PY' > result.json
+          import os,json
+          raw=os.environ['CLOUDINARY_RAW'].strip().strip('"').strip("'")
+          if raw.startswith('CLOUDINARY_URL='): raw=raw.split('=',1)[1].strip().strip('"').strip("'")
+          body=raw[len('cloudinary://'):]; cred,cloud=body.rsplit('@',1); key,secret=cred.split(':',1); cloud=cloud.split('?',1)[0].strip('/')
+          import cloudinary,cloudinary.uploader
+          cloudinary.config(cloud_name=cloud,api_key=key,api_secret=secret,secure=True)
+          r=cloudinary.uploader.upload('inside-nepal-package/inside-nepal-photo.jpg',resource_type='image',folder='inside-nepal-production/cards',overwrite=False)
+          print(json.dumps({'url':r['secure_url']}))
+          PY
+          echo "url=$(jq -r '.url' result.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish saved photo to Buffer
         env:
           BUFFER_API_TOKEN: ${{ secrets.BUFFER_API_TOKEN }}
           BUFFER_CHANNEL_ID: ${{ secrets.BUFFER_CHANNEL_ID }}
+          IMAGE_URL: ${{ steps.host.outputs.url }}
         run: |
           set -euo pipefail
-          KIND=$(jq -r '.kind' inside-nepal-package/publish.json)
           POST_TEXT=$(jq -r '.text' inside-nepal-package/publish.json)
-          VIDEO_URL=$(jq -r '.video_url // empty' inside-nepal-package/publish.json)
-          IMAGE_URL=$(jq -r '.image_url // empty' inside-nepal-package/publish.json)
-          SLOT=$(jq -r '.slot_npt // ""' inside-nepal-package/publish.json)
           DUE_AT=$(date -u -d '+10 minutes' '+%Y-%m-%dT%H:%M:00.000Z')
-
-          TOKEN="$BUFFER_API_TOKEN"
-          TOKEN="${TOKEN#Bearer }"
-          TOKEN="$(printf '%s' "$TOKEN" | tr -d '\r\n' | xargs)"
-          CHANNEL="$(printf '%s' "$BUFFER_CHANNEL_ID" | tr -d '\r\n' | xargs)"
-
           QUERY='mutation CreatePost($input: CreatePostInput!) { createPost(input: $input) { ... on PostActionSuccess { post { id dueAt status } } ... on MutationError { message } } }'
-
-          if [ "$KIND" = 'reel' ]; then
-            [ -n "$VIDEO_URL" ] || { echo 'Saved video URL missing'; exit 1; }
-            jq -n --arg query "$QUERY" --arg text "$POST_TEXT" --arg channel "$CHANNEL" --arg due "$DUE_AT" --arg video "$VIDEO_URL" \
-              '{query:$query,variables:{input:{text:$text,channelId:$channel,metadata:{facebook:{type:"reel"}},schedulingType:"automatic",mode:"customScheduled",dueAt:$due,assets:[{video:{url:$video}}]}}}' > buffer.json
-          else
-            [ -n "$IMAGE_URL" ] || { echo 'Saved image URL missing'; exit 1; }
-            jq -n --arg query "$QUERY" --arg text "$POST_TEXT" --arg channel "$CHANNEL" --arg due "$DUE_AT" --arg image "$IMAGE_URL" \
-              '{query:$query,variables:{input:{text:$text,channelId:$channel,metadata:{facebook:{type:"post"}},schedulingType:"automatic",mode:"customScheduled",dueAt:$due,assets:[{image:{url:$image}}]}}}' > buffer.json
-          fi
-
-          HTTP=$(curl -sS -o buffer-response.json -w '%{http_code}' -X POST 'https://api.buffer.com' \
-            -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" --data-binary @buffer.json)
-          cat buffer-response.json | jq . || true
-          [ "$HTTP" -ge 200 ] && [ "$HTTP" -lt 300 ] || { echo "Buffer HTTP $HTTP"; exit 1; }
-          ERR=$(jq -r '.errors[0].message // .data.createPost.message // empty' buffer-response.json)
-          ID=$(jq -r '.data.createPost.post.id // empty' buffer-response.json)
-          [ -z "$ERR" ] && [ -n "$ID" ] || { echo "Buffer error: $ERR"; exit 1; }
-          echo "Published saved Inside Nepal $KIND package $ID from Nepal slot $SLOT"
+          jq -n --arg query "$QUERY" --arg text "$POST_TEXT" --arg channel "$BUFFER_CHANNEL_ID" --arg due "$DUE_AT" --arg image "$IMAGE_URL" '{query:$query,variables:{input:{text:$text,channelId:$channel,metadata:{facebook:{type:"post"}},schedulingType:"automatic",mode:"customScheduled",dueAt:$due,assets:[{image:{url:$image}}]}}}' > buffer.json
+          HTTP=$(curl -sS -o response.json -w '%{http_code}' -X POST 'https://api.buffer.com' -H 'Content-Type: application/json' -H "Authorization: Bearer $BUFFER_API_TOKEN" --data-binary @buffer.json)
+          [ "$HTTP" -ge 200 ] && [ "$HTTP" -lt 300 ] || exit 1
+          ERR=$(jq -r '.errors[0].message // .data.createPost.message // empty' response.json); ID=$(jq -r '.data.createPost.post.id // empty' response.json)
+          [ -z "$ERR" ] && [ -n "$ID" ] || { echo "$ERR"; exit 1; }
+          echo "Inside Nepal saved photo published: $ID"
