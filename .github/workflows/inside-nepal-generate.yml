@@ -3,8 +3,8 @@ name: Inside Nepal Generate Package
 on:
   workflow_dispatch:
   schedule:
-    # 00:15-18:15 UTC = 06:00-00:00 Nepal time (UTC+5:45), 19 slots/day.
-    - cron: '15 0-18 * * *'
+    # 6 shared packages/day. Each package feeds one photo + one reel.
+    - cron: '15 0,4,8,12,16,20 * * *'
 
 permissions:
   contents: read
@@ -17,7 +17,7 @@ concurrency:
 jobs:
   generate:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 30
     steps:
       - name: Checkout public runner
         uses: actions/checkout@v4
@@ -40,193 +40,40 @@ jobs:
       - name: Install requirements
         run: |
           pip install -r private-code/requirements.txt
-          pip install cloudinary
 
-      - name: Resolve target Nepal slot
+      - name: Resolve Nepal slot metadata
         id: slot
         shell: bash
         run: |
           set -euo pipefail
-          UTC_HOUR=$(date -u +%H)
-          UTC_HOUR=$((10#$UTC_HOUR))
+          UTC_HOUR=$((10#$(date -u +%H)))
           NPT_HOUR=$(((UTC_HOUR + 6) % 24))
           printf -v NPT_PAD '%02d' "$NPT_HOUR"
-
-          if [[ "$NPT_HOUR" == "8" || "$NPT_HOUR" == "11" || "$NPT_HOUR" == "14" || "$NPT_HOUR" == "17" || "$NPT_HOUR" == "20" ]]; then
-            KIND='reel'
-          elif [[ "$NPT_HOUR" == "6" || "$NPT_HOUR" == "9" || "$NPT_HOUR" == "12" || "$NPT_HOUR" == "15" || "$NPT_HOUR" == "18" || "$NPT_HOUR" == "21" || "$NPT_HOUR" == "23" ]]; then
-            KIND='photo'
-          else
-            KIND='text'
-          fi
-
-          case "$NPT_HOUR" in
-            8|14|20) REEL_MODE='news_roundup' ;;
-            11) REEL_MODE='travel_curiosity' ;;
-            17) REEL_MODE='festival_culture' ;;
-            *) REEL_MODE='' ;;
-          esac
-
-          echo "hour=$NPT_HOUR" >> "$GITHUB_OUTPUT"
           echo "hour_pad=$NPT_PAD" >> "$GITHUB_OUTPUT"
-          echo "kind=$KIND" >> "$GITHUB_OUTPUT"
-          echo "reel_mode=$REEL_MODE" >> "$GITHUB_OUTPUT"
-          echo "Resolved Nepal slot: ${NPT_PAD}:00 -> ${KIND} ${REEL_MODE}"
 
-      - name: Locate FFmpeg
-        if: steps.slot.outputs.kind == 'reel'
-        working-directory: private-code
-        run: |
-          FFMPEG_PATH="$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')"
-          echo "FFMPEG_BIN=$FFMPEG_PATH" >> "$GITHUB_ENV"
-
-      - name: Generate news with strict media router
-        if: steps.slot.outputs.kind == 'reel' && steps.slot.outputs.reel_mode == 'news_roundup'
+      - name: Generate one verified 4-news package and fixed card
         working-directory: private-code
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
-          AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
-          AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
-          AZURE_SPEECH_VOICE: ne-NP-SagarNeural
-          FFMPEG_BIN: ${{ env.FFMPEG_BIN }}
-          INSIDE_NEPAL_REEL_MODE: news_roundup
-          INSIDE_NEPAL_SLOT_HOUR: ${{ steps.slot.outputs.hour_pad }}
-        run: python news_router.py
-
-      - name: Generate travel or culture reel
-        if: steps.slot.outputs.kind == 'reel' && steps.slot.outputs.reel_mode != 'news_roundup'
-        working-directory: private-code
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
-          AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
-          AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
-          AZURE_SPEECH_VOICE: ne-NP-SagarNeural
-          FFMPEG_BIN: ${{ env.FFMPEG_BIN }}
-          INSIDE_NEPAL_REEL_MODE: ${{ steps.slot.outputs.reel_mode }}
-        run: python reel_v7.py
-
-      - name: Generate regular designed post
-        if: steps.slot.outputs.kind != 'reel'
-        working-directory: private-code
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
-          INSIDE_NEPAL_POST_KIND: ${{ steps.slot.outputs.kind }}
+          INSIDE_NEPAL_POST_KIND: photo
           INSIDE_NEPAL_SLOT_HOUR: ${{ steps.slot.outputs.hour_pad }}
         run: python mixed_post.py
 
-      - name: Resolve effective post kind and caption
-        id: route
-        working-directory: private-code
-        shell: bash
-        run: |
-          set -euo pipefail
-          PLANNED='${{ steps.slot.outputs.kind }}'
-          MODE='${{ steps.slot.outputs.reel_mode }}'
-
-          if [ "$PLANNED" = 'reel' ] && [ "$MODE" = 'news_roundup' ]; then
-            KIND=$(jq -r '.kind' output/route.json)
-            TEXT=$(jq -r '.caption' output/route.json)
-          elif [ "$PLANNED" = 'reel' ]; then
-            KIND='reel'
-            TEXT=$(python - <<'PY'
-          import json
-          d=json.load(open('output/verification.json',encoding='utf-8'))
-          print(f"{d.get('hook','').strip()}\n\n{d.get('script','').strip()}\n\n#InsideNepal #Nepal #Nepali #नेपाल")
-          PY
-          )
-          else
-            KIND='photo'
-            TEXT=$(python - <<'PY'
-          import json
-          d=json.load(open('output-mixed/post.json',encoding='utf-8'))
-          print(d['caption'].strip())
-          PY
-          )
-          fi
-
-          echo "kind=$KIND" >> "$GITHUB_OUTPUT"
-          echo 'text<<EOF' >> "$GITHUB_OUTPUT"
-          printf '%s\n' "$TEXT" >> "$GITHUB_OUTPUT"
-          echo 'EOF' >> "$GITHUB_OUTPUT"
-          echo "Effective kind: $KIND"
-
-      - name: Upload effective reel to Cloudinary
-        if: steps.route.outputs.kind == 'reel'
-        id: reelhost
-        working-directory: private-code
+      - name: Build immutable shared package
         env:
-          CLOUDINARY_RAW: ${{ secrets.CLOUDINARY_URL }}
-          REEL_MODE: ${{ steps.slot.outputs.reel_mode }}
-        run: |
-          set -euo pipefail
-          if [ "$REEL_MODE" = 'news_roundup' ]; then FILE='output/inside-nepal-routed-reel.mp4'; else FILE='output/inside-nepal-v7.mp4'; fi
-          export FILE
-          python - <<'PY' > cloudinary-result.json
-          import os, json
-          raw=os.environ['CLOUDINARY_RAW'].strip().strip('"').strip("'")
-          if raw.startswith('CLOUDINARY_URL='): raw=raw.split('=',1)[1].strip().strip('"').strip("'")
-          if not raw.startswith('cloudinary://'): raise SystemExit('Invalid Cloudinary secret')
-          body=raw[len('cloudinary://'):]; cred,cloud=body.rsplit('@',1); key,secret=cred.split(':',1); cloud=cloud.split('?',1)[0].strip('/')
-          import cloudinary, cloudinary.uploader
-          cloudinary.config(cloud_name=cloud,api_key=key,api_secret=secret,secure=True)
-          r=cloudinary.uploader.upload(os.environ['FILE'],resource_type='video',folder='inside-nepal-production/reels',overwrite=False)
-          print(json.dumps({'url':r['secure_url']}))
-          PY
-          URL=$(jq -r '.url // empty' cloudinary-result.json)
-          [ -n "$URL" ] || exit 1
-          echo "url=$URL" >> "$GITHUB_OUTPUT"
-
-      - name: Upload effective designed card to Cloudinary
-        if: steps.route.outputs.kind == 'photo'
-        id: photohost
-        working-directory: private-code
-        env:
-          CLOUDINARY_RAW: ${{ secrets.CLOUDINARY_URL }}
-          PLANNED: ${{ steps.slot.outputs.kind }}
-          MODE: ${{ steps.slot.outputs.reel_mode }}
-        run: |
-          set -euo pipefail
-          if [ "$PLANNED" = 'reel' ] && [ "$MODE" = 'news_roundup' ]; then FILE='output/inside-nepal-news-photo.jpg'; else FILE='output-mixed/inside-nepal-photo.jpg'; fi
-          [ -f "$FILE" ] || { echo "Designed card missing: $FILE"; exit 1; }
-          export FILE
-          python - <<'PY' > cloudinary-photo-result.json
-          import os, json
-          raw=os.environ['CLOUDINARY_RAW'].strip().strip('"').strip("'")
-          if raw.startswith('CLOUDINARY_URL='): raw=raw.split('=',1)[1].strip().strip('"').strip("'")
-          if not raw.startswith('cloudinary://'): raise SystemExit('Invalid Cloudinary secret')
-          body=raw[len('cloudinary://'):]; cred,cloud=body.rsplit('@',1); key,secret=cred.split(':',1); cloud=cloud.split('?',1)[0].strip('/')
-          import cloudinary, cloudinary.uploader
-          cloudinary.config(cloud_name=cloud,api_key=key,api_secret=secret,secure=True)
-          r=cloudinary.uploader.upload(os.environ['FILE'],resource_type='image',folder='inside-nepal-production/cards',overwrite=False)
-          print(json.dumps({'url':r['secure_url']}))
-          PY
-          URL=$(jq -r '.url // empty' cloudinary-photo-result.json)
-          [ -n "$URL" ] || exit 1
-          echo "url=$URL" >> "$GITHUB_OUTPUT"
-
-      - name: Save immutable publish package
-        env:
-          KIND: ${{ steps.route.outputs.kind }}
-          TEXT: ${{ steps.route.outputs.text }}
-          VIDEO_URL: ${{ steps.reelhost.outputs.url }}
-          IMAGE_URL: ${{ steps.photohost.outputs.url }}
           SLOT: ${{ steps.slot.outputs.hour_pad }}
-          MODE: ${{ steps.slot.outputs.reel_mode }}
         run: |
+          set -euo pipefail
           mkdir -p inside-nepal-package
-          jq -n \
-            --arg kind "$KIND" --arg text "$TEXT" --arg video "$VIDEO_URL" --arg image "$IMAGE_URL" --arg slot "$SLOT" --arg mode "$MODE" \
-            '{kind:$kind,text:$text,video_url:$video,image_url:$image,slot_npt:$slot,reel_mode:$mode,template:"INSIDE_NEPAL_SAVED_PACKAGE_V1"}' \
-            > inside-nepal-package/publish.json
-          cat inside-nepal-package/publish.json | jq .
+          cp private-code/output-mixed/inside-nepal-photo.jpg inside-nepal-package/inside-nepal-photo.jpg
+          cp private-code/output-mixed/post.json inside-nepal-package/content.json
+          CAPTION=$(jq -r '.caption' private-code/output-mixed/post.json)
+          jq -n --arg text "$CAPTION" --arg slot "$SLOT" '{kind:"photo",text:$text,slot_npt:$slot,image_file:"inside-nepal-photo.jpg",template:"INSIDE_NEPAL_4_NEWS_SHARED_V2"}' > inside-nepal-package/publish.json
 
-      - name: Upload saved publish package
+      - name: Upload saved shared package
         uses: actions/upload-artifact@v4
         with:
           name: inside-nepal-package-${{ github.run_id }}
-          path: inside-nepal-package/publish.json
+          path: inside-nepal-package/
           if-no-files-found: error
           retention-days: 7
