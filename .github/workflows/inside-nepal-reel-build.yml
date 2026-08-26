@@ -1,0 +1,96 @@
+name: Inside Nepal Reel Build
+
+on:
+  workflow_run:
+    workflows: ['Inside Nepal Generate Package']
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: 'Successful Inside Nepal Generate Package run ID'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: inside-nepal-reel-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - name: Resolve source generation run
+        id: source
+        shell: bash
+        env:
+          AUTO_RUN_ID: ${{ github.event.workflow_run.id }}
+          MANUAL_RUN_ID: ${{ inputs.source_run_id }}
+        run: |
+          if [ "${{ github.event_name }}" = 'workflow_run' ]; then RUN_ID="$AUTO_RUN_ID"; else RUN_ID="$MANUAL_RUN_ID"; fi
+          [ -n "$RUN_ID" ] || exit 1
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download saved shared package
+        uses: actions/download-artifact@v4
+        with:
+          name: inside-nepal-package-${{ steps.source.outputs.run_id }}
+          path: inside-nepal-package
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.source.outputs.run_id }}
+
+      - name: Install free reel tools
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ffmpeg jq
+          pip install cloudinary
+
+      - name: Build reel from exact saved photo only
+        run: |
+          set -euo pipefail
+          mkdir -p reel-out
+          ffmpeg -y -loop 1 -i inside-nepal-package/inside-nepal-photo.jpg \
+            -f lavfi -i "sine=frequency=196:duration=20:sample_rate=44100" \
+            -f lavfi -i "sine=frequency=294:duration=20:sample_rate=44100" \
+            -filter_complex "[0:v]scale=1080:1350,zoompan=z='min(zoom+0.0007,1.06)':d=600:s=1080x1350:fps=30,pad=1080:1920:0:285:color=0xf7f7f6,format=yuv420p[v];[1:a]volume=0.06[a1];[2:a]volume=0.035[a2];[a1][a2]amix=inputs=2:normalize=0,lowpass=f=1800,afade=t=in:st=0:d=1,afade=t=out:st=17:d=3[a]" \
+            -map '[v]' -map '[a]' -t 20 -c:v libx264 -preset veryfast -crf 21 -c:a aac -b:a 128k -movflags +faststart reel-out/inside-nepal-reel.mp4
+
+      - name: Upload saved-derived reel to Cloudinary
+        id: host
+        env:
+          CLOUDINARY_RAW: ${{ secrets.CLOUDINARY_URL }}
+        run: |
+          python - <<'PY' > result.json
+          import os,json
+          raw=os.environ['CLOUDINARY_RAW'].strip().strip('"').strip("'")
+          if raw.startswith('CLOUDINARY_URL='): raw=raw.split('=',1)[1].strip().strip('"').strip("'")
+          body=raw[len('cloudinary://'):]; cred,cloud=body.rsplit('@',1); key,secret=cred.split(':',1); cloud=cloud.split('?',1)[0].strip('/')
+          import cloudinary,cloudinary.uploader
+          cloudinary.config(cloud_name=cloud,api_key=key,api_secret=secret,secure=True)
+          r=cloudinary.uploader.upload('reel-out/inside-nepal-reel.mp4',resource_type='video',folder='inside-nepal-production/reels',overwrite=False)
+          print(json.dumps({'url':r['secure_url']}))
+          PY
+          echo "url=$(jq -r '.url' result.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Save reel publish package
+        env:
+          VIDEO_URL: ${{ steps.host.outputs.url }}
+          SOURCE_RUN: ${{ steps.source.outputs.run_id }}
+        run: |
+          mkdir -p inside-nepal-reel-package
+          TEXT=$(jq -r '.text' inside-nepal-package/publish.json)
+          jq -n --arg text "$TEXT" --arg video "$VIDEO_URL" --arg source "$SOURCE_RUN" '{kind:"reel",text:$text,video_url:$video,source_generate_run:$source,template:"INSIDE_NEPAL_SAME_NEWS_REEL_V1"}' > inside-nepal-reel-package/publish.json
+
+      - name: Upload reel package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: inside-nepal-reel-${{ github.run_id }}
+          path: inside-nepal-reel-package/
+          if-no-files-found: error
+          retention-days: 7
